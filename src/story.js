@@ -26,8 +26,9 @@ export const scenes = {
     next: 'wake',
   },
   wake: {
-    clip: 'clips/04-eyes-open.mp4',
-    loopClip: 'clips/04b-strapped-idle.mp4',
+    clip: CDN + 'hf_20261022_173353_ac16d2cb-0a7b-41dd-bb10-7a68448563bf.mp4',
+    // Plays on loop while the phones work the belt.
+    loopClip: CDN + 'hf_20261022_173405_51afb539-3a8a-4ecd-a580-48b573dcaf32.mp4',
     interaction: {
       type: 'slideUnlock',
       prompt: 'Unlock your seat belt',
@@ -38,7 +39,7 @@ export const scenes = {
     next: 'exit',
   },
   exit: {
-    clip: 'clips/05-exit-ship.mp4',
+    clip: CDN + 'hf_20261022_173405_0e1b4ae5-63fd-4d68-a0ed-1fc54fb52f85.mp4',
     next: null,
   },
 };

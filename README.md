@@ -30,8 +30,8 @@ title card so the flow can be tested without footage.
 | meteor | Meteor over the alien desert; camera pushes in to reveal a burning ship | rendered |
 | descent | Ship tumbles through the atmosphere toward the ground | rendered |
 | crash | Ship slams into the desert and skids to a stop | rendered |
-| wake | Close-up: the astronaut's eyes open in the wrecked cockpit, strapped in (+ idle loop while phones unlock) | to do |
-| exit | Belt releases, astronaut climbs out onto the planet | to do |
+| wake | Close-up: the astronaut's eyes open in the wrecked cockpit, strapped in (+ idle loop while phones unlock) | rendered |
+| exit | Belt releases, astronaut climbs out onto the planet | rendered |
 
 ## Deploy
 
