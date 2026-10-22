@@ -100,9 +100,10 @@ function advance(scene) {
   if (scene.next) goTo(scene.next);
 }
 
-// Starts a clip from the top and makes it the visible one. The previous clip
-// stays on screen until the new one has a frame, so there is never black.
-// Resolves when a non-looping clip ends.
+// Starts a clip from the top and makes it the visible one. The new clip is
+// layered on top and only revealed once it is playing, so the previous
+// clip's last frame covers the cut and there is never a black flash. Resolves when a non-looping clip ends.
+let layer = 0;
 function show(src, loop) {
   const v = videos.get(src);
   const prev = active;
@@ -113,20 +114,32 @@ function show(src, loop) {
     // A clip that failed to load is skipped rather than stalling the film.
     if (v.error) return resolve();
     v.onended = loop ? null : () => resolve();
+    v.onerror = () => resolve();
+    if (v === prev) {
+      v.play().catch(() => {});
+      return;
+    }
+    v.style.zIndex = ++layer;
     const reveal = () => {
       v.classList.add('active');
-      if (prev && prev !== v) {
+      if (prev) {
         prev.classList.remove('active');
         prev.pause();
       }
     };
-    v.play().then(reveal, () => {
+    onFirstFrame(v, reveal);
+    v.play().catch(() => {
       // Autoplay with sound blocked: retry muted rather than stall the film.
       v.muted = true;
-      v.play().then(reveal, () => {});
+      v.play().catch(() => {});
     });
-    v.onerror = () => resolve();
   });
+}
+
+// Calls fn once the clip is actually playing, i.e. it has a decoded frame
+// to show, so swapping it in never exposes an empty (black) element.
+function onFirstFrame(v, fn) {
+  v.addEventListener('playing', fn, { once: true });
 }
 
 async function reset() {

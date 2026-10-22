@@ -24,9 +24,10 @@ never waits on the network; Begin unlocks once all clips have buffered.
 
 ## Clips
 
-Each scene's clip is set in `src/story.js`: either a URL (the rendered clips
-live on the Higgsfield CDN) or a file in `public/clips/`. Missing clips show a
-title card so the flow can be tested without footage.
+Rendered clip URLs live in `clips.json`. `npm run clips` (needs ffmpeg)
+downloads them into `public/clips/` and trims black frames off each end so
+cuts don't flash black; the deploy workflow runs it on every push.
+`src/story.js` points each scene at its trimmed file. Missing clips are skipped.
 
 | Scene | Shot | Status |
 | --- | --- | --- |
