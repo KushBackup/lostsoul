@@ -23,10 +23,7 @@ h1 { letter-spacing: 0.4em; font-weight: 300; }
 /* Big screen */
 .screen { overflow: hidden; }
 #stage { position: fixed; inset: 0; background: #000; }
-#stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; visibility: hidden; }
-#stage video.active { visibility: visible; }
-#freeze { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 1; display: none; }
-#freeze.on { display: block; }
+#stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .btn:disabled { opacity: 0.4; cursor: wait; }
 #loading { color: var(--dim); font-size: 16px; }
 .reset {

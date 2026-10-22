@@ -1,6 +1,9 @@
-// Downloads the rendered clips listed in clips.json into public/clips/ and
-// trims any black frames off their start and end, so cuts between clips
-// don't flash black. Needs ffmpeg on PATH. Usage: node scripts/prepare-clips.mjs
+// Downloads the rendered clips listed in clips.json into public/clips/,
+// trims any black frames off their start and end, and encodes every clip
+// with identical settings (1080p, 24fps, VP9 + Opus in fragmented MP4,
+// keyframe every 0.5s) so the screen's SeamlessPlayer can chain them into
+// one stream.
+// Needs ffmpeg on PATH. Usage: node scripts/prepare-clips.mjs
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
@@ -36,11 +39,21 @@ for (const [name, url] of Object.entries(clips)) {
   }
   if (end - start < 0.5) throw new Error(`${name}: clip is almost entirely black`);
 
+  const hasAudio = execFileSync('ffprobe', [
+    '-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=index', '-of', 'csv=p=0', raw,
+  ]).toString().trim() !== '';
   execFileSync('ffmpeg', [
     '-y', '-hide_banner', '-loglevel', 'error',
     '-ss', start.toFixed(3), '-to', end.toFixed(3), '-i', raw,
-    '-c:v', 'libx264', '-preset', 'medium', '-crf', '18', '-pix_fmt', 'yuv420p',
-    '-c:a', 'aac', '-b:a', '160k', '-movflags', '+faststart',
+    // Clips without sound get silence so every segment has the same tracks.
+    ...(hasAudio ? [] : ['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo']),
+    '-map', '0:v:0', '-map', hasAudio ? '0:a:0' : '1:a:0',
+    '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,fps=24,format=yuv420p',
+    '-c:v', 'libvpx-vp9', '-b:v', '0', '-crf', '30', '-deadline', 'good', '-cpu-used', '4', '-row-mt', '1',
+    '-g', '12', '-keyint_min', '12',
+    '-af', 'apad', '-c:a', 'libopus', '-b:a', '160k', '-ar', '48000', '-ac', '2',
+    '-shortest',
+    '-f', 'mp4', '-movflags', '+frag_keyframe+empty_moov+default_base_moof',
     join(outDir, `${name}.mp4`),
   ]);
   const runText = runs.map((r) => `${r.start.toFixed(2)}-${r.end.toFixed(2)}`).join(', ') || 'none';

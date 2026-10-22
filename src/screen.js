@@ -1,6 +1,7 @@
 import QRCode from 'qrcode';
 import { connect, roomFromUrl, usingFirebase } from './sync.js';
 import { scenes, START } from './story.js';
+import { SeamlessPlayer, isSupported } from './player.js';
 
 const room = roomFromUrl();
 const store = connect(room);
@@ -12,27 +13,20 @@ QRCode.toCanvas($('qr'), joinUrl, { width: 260, margin: 1 });
 
 // The screen drives the film locally so cuts never wait on the network.
 // Firebase only carries the current scene out to the phones and their
-// responses back. Every clip gets its own preloaded <video>, so a cut is
-// just swapping which element is visible.
-const videos = new Map();
-for (const scene of Object.values(scenes)) {
-  for (const src of [scene.clip, scene.loopClip]) {
-    if (!src || videos.has(src)) continue;
-    const v = document.createElement('video');
-    v.src = src;
-    v.preload = 'auto';
-    v.playsInline = true;
-    $('stage').appendChild(v);
-    videos.set(src, v);
-  }
-}
+// responses back. All clips play through one SeamlessPlayer stream, so the
+// film is a single continuous video with no cuts between clips.
+const player = new SeamlessPlayer($('video'));
+const loopOf = (scene) => scene.loopClip ?? scene.clip;
 
 let state = {};
 let current = null;
-let active = null;
+let lastEntry = null;
+let resolved = false;
+let openFor = null;
 let waitTimer = null;
+let frame = null;
 
-waitForClips();
+loadFilm();
 
 store.subscribe((next) => {
   state = next;
@@ -42,7 +36,7 @@ store.subscribe((next) => {
 
 $('startBtn').onclick = async () => {
   await store.reset();
-  goTo(START);
+  start();
 };
 
 $('resetBtn').onclick = reset;
@@ -54,147 +48,135 @@ function playerCount() {
   return Object.keys(state.players || {}).length;
 }
 
-function goTo(id) {
-  current = id;
-  clearTimeout(waitTimer);
-  const scene = scenes[id];
+async function loadFilm() {
+  if (!isSupported()) {
+    $('loading').textContent = 'This browser cannot play the film. Use Chrome, Edge, Firefox or Safari on a computer.';
+    return;
+  }
+  const urls = new Set();
+  for (const scene of Object.values(scenes)) {
+    urls.add(scene.clip);
+    if (scene.interaction) urls.add(loopOf(scene));
+  }
+  try {
+    await player.load([...urls], (n, total) => {
+      $('loading').textContent = `Loading film… ${n}/${total}`;
+    });
+    $('loading').textContent = '';
+    $('startBtn').disabled = false;
+  } catch (err) {
+    $('loading').textContent = `Could not load the film (${err.message}).`;
+  }
+}
+
+function start() {
   $('lobby').classList.add('hidden');
   $('hud').classList.add('hidden');
   $('resetBtn').classList.remove('hidden');
-  show(scene.clip, false).then(() => {
-    if (current !== id) return;
-    if (scene.interaction) {
-      openInteraction(scene);
-    } else {
-      advance(scene);
-    }
+  current = null;
+  lastEntry = null;
+  openFor = null;
+  player.open();
+  queueFrom(START);
+  player.video.play().catch(() => {
+    // Autoplay with sound blocked: play muted rather than stall the film.
+    player.video.muted = true;
+    player.video.play();
   });
-  store.setScene(id);
+  watch();
+}
+
+// Appends scene `id` and everything after it that doesn't depend on the
+// audience. An interaction scene is followed by its loop clip, which keeps
+// repeating until the interaction resolves. With `cutAt`, the stream jumps
+// to this scene at that time instead of after what's already queued.
+function queueFrom(id, cutAt) {
+  const scene = scenes[id];
+  const tag = { scene: id, kind: 'clip' };
+  const first = cutAt == null
+    ? player.append(scene.clip, tag)
+    : player.cutTo(cutAt, scene.clip, tag);
+  if (scene.interaction) {
+    resolved = false;
+    player.append(loopOf(scene), { scene: id, kind: 'loop' });
+  } else if (scene.next) {
+    first.then(() => queueFrom(scene.next));
+  } else {
+    player.finish();
+  }
+}
+
+// Follows the playhead and reacts as it crosses into each queued clip.
+function watch() {
+  cancelAnimationFrame(frame);
+  const tick = () => {
+    const entry = player.entryAt();
+    if (entry && entry !== lastEntry) {
+      lastEntry = entry;
+      enter(entry);
+    }
+    frame = requestAnimationFrame(tick);
+  };
+  frame = requestAnimationFrame(tick);
+}
+
+function enter({ tag, url }) {
+  const scene = scenes[tag.scene];
+  if (tag.kind === 'clip') {
+    current = tag.scene;
+    $('hud').classList.add('hidden');
+    store.setScene(current);
+    return;
+  }
+  // A loop pass: the first one opens the interaction; each pass queues the
+  // next so the loop never runs dry.
+  if (openFor !== current) openInteraction(scene);
+  if (!resolved) player.append(url, tag);
 }
 
 function openInteraction(scene) {
-  // Cut straight into the loop; if there is none, hold the last frame.
-  if (scene.loopClip) show(scene.loopClip, true);
+  openFor = current;
   store.setScene(current, 'interact');
   $('prompt').textContent = scene.interaction.prompt;
   $('hud').classList.remove('hidden');
-  waitTimer = setTimeout(() => advance(scene), scene.interaction.timeoutMs);
+  clearTimeout(waitTimer);
+  waitTimer = setTimeout(() => resolveInteraction(scene), scene.interaction.timeoutMs);
   checkInteraction();
 }
 
 function checkInteraction() {
   const scene = scenes[current];
+  if (resolved) return;
   const done = Object.keys(state.responses?.[current] || {}).length;
   const needed = Math.max(1, Math.ceil(playerCount() * scene.interaction.threshold));
   $('progress').style.width = `${Math.min(100, (done / needed) * 100)}%`;
   $('progressText').textContent = `${done} / ${needed}`;
-  if (done >= needed) {
-    clearTimeout(waitTimer);
-    waitTimer = setTimeout(() => advance(scene), 600);
-  }
+  if (done >= needed) resolveInteraction(scene);
 }
 
-function advance(scene) {
+// Leaves the loop: the next scene is spliced in a moment ahead of the
+// playhead, so the change lands mid-stream without any pause.
+function resolveInteraction(scene) {
+  if (resolved) return;
+  resolved = true;
   clearTimeout(waitTimer);
-  $('hud').classList.add('hidden');
-  if (scene.next) goTo(scene.next);
-}
-
-// Starts a clip from the top and makes it the visible one. Swapping <video>
-// elements can show a black frame while the new one gets its first frame on
-// screen, so the old clip's last frame is copied onto a canvas laid over the
-// stage and held there until the new clip has painted.
-// Resolves when a non-looping clip ends.
-const freeze = document.createElement('canvas');
-freeze.id = 'freeze';
-$('stage').appendChild(freeze);
-
-function show(src, loop) {
-  const v = videos.get(src);
-  const prev = active;
-  active = v;
-  v.loop = loop;
-  v.currentTime = 0;
-  return new Promise((resolve) => {
-    // A clip that failed to load is skipped rather than stalling the film.
-    if (v.error) return resolve();
-    v.onended = loop ? null : () => resolve();
-    v.onerror = () => resolve();
-    if (prev && prev !== v) {
-      holdFrame(prev);
-      prev.classList.remove('active');
-      prev.pause();
-    }
-    v.classList.add('active');
-    afterFirstPaint(v, () => freeze.classList.remove('on'));
-    v.play().catch(() => {
-      // Autoplay with sound blocked: retry muted rather than stall the film.
-      v.muted = true;
-      v.play().catch(() => {});
-    });
-  });
-}
-
-function holdFrame(v) {
-  freeze.width = v.videoWidth || 1920;
-  freeze.height = v.videoHeight || 1080;
-  try {
-    freeze.getContext('2d').drawImage(v, 0, 0, freeze.width, freeze.height);
-    freeze.classList.add('on');
-  } catch {
-    // Nothing to hold; the cut just happens.
-  }
-}
-
-// Calls fn once v has painted a frame, or after a short cap so a slow frame
-// callback can never make the picture look frozen.
-function afterFirstPaint(v, fn) {
-  let done = false;
-  const once = () => {
-    if (!done) {
-      done = true;
-      fn();
-    }
-  };
-  setTimeout(once, 200);
-  if ('requestVideoFrameCallback' in v) {
-    v.requestVideoFrameCallback(() => requestAnimationFrame(once));
+  setTimeout(() => $('hud').classList.add('hidden'), 600);
+  if (scene.next) {
+    queueFrom(scene.next, player.video.currentTime + 0.5);
   } else {
-    v.addEventListener('playing', () => requestAnimationFrame(() => requestAnimationFrame(once)), { once: true });
+    player.finish();
   }
 }
 
 async function reset() {
   clearTimeout(waitTimer);
+  cancelAnimationFrame(frame);
   current = null;
-  for (const v of videos.values()) {
-    v.pause();
-    v.classList.remove('active');
-    v.currentTime = 0;
-  }
-  active = null;
-  freeze.classList.remove('on');
+  lastEntry = null;
+  openFor = null;
+  player.stop();
   $('hud').classList.add('hidden');
   $('resetBtn').classList.add('hidden');
   $('lobby').classList.remove('hidden');
   await store.reset();
-}
-
-// Begin unlocks once every clip has buffered enough to play through.
-function waitForClips() {
-  const all = [...videos.values()];
-  let ready = 0;
-  const update = () => {
-    $('loading').textContent = ready < all.length ? `Loading film… ${ready}/${all.length}` : '';
-    $('startBtn').disabled = ready < all.length;
-  };
-  for (const v of all) {
-    const done = () => { ready++; update(); };
-    if (v.readyState >= 4) done();
-    else {
-      v.addEventListener('canplaythrough', done, { once: true });
-      v.addEventListener('error', done, { once: true });
-    }
-  }
-  update();
 }

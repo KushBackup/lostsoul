@@ -70,6 +70,8 @@ function localRoom(room) {
     emit();
   };
   channel.onmessage = emit;
+  // Backup path: background tabs can miss channel messages.
+  window.addEventListener('storage', (e) => e.key === key && emit());
   return {
     subscribe(cb) {
       listeners.add(cb);

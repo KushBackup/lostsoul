@@ -19,14 +19,19 @@ viewer's phone shows the interaction the current scene needs.
 
 Use `?room=name` on both pages to run separate rooms. On the big screen, the
 Reset button (top-right, appears on hover) or the R key returns to the lobby.
-The screen preloads every clip and cuts between them locally, so playback
-never waits on the network; Begin unlocks once all clips have buffered.
+The screen downloads every clip up front (Begin unlocks when done) and plays
+them through `src/player.js`, a Media Source player that appends each clip to
+one continuous stream, so there is no cut between clips. Interaction scenes
+repeat their loop clip until the audience responds, then the next scene is
+spliced in half a second ahead of the playhead. Use Chrome or Edge on the
+big screen.
 
 ## Clips
 
 Rendered clip URLs live in `clips.json`. `npm run clips` (needs ffmpeg)
-downloads them into `public/clips/` and trims black frames off each end so
-cuts don't flash black; the deploy workflow runs it on every push.
+downloads them into `public/clips/`, trims black frames off each end, and
+re-encodes them all to one format (1080p, 24fps, VP9 + Opus fragmented MP4)
+so the player can chain them; the deploy workflow runs it on every push.
 `src/story.js` points each scene at its trimmed file. Missing clips are skipped.
 
 | Scene | Shot | Status |
