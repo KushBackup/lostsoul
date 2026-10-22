@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LostSoul · Screen</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body class="screen">
+  <video id="video" playsinline></video>
+  <div id="lobby" class="overlay">
+    <h1>LOST SOUL</h1>
+    <canvas id="qr"></canvas>
+    <p id="joinUrl"></p>
+    <p><span id="playerCount">0</span> souls connected</p>
+    <button id="startBtn" class="btn">Begin</button>
+  </div>
+  <div id="hud" class="hud hidden">
+    <p id="prompt"></p>
+    <div class="bar"><div id="progress"></div></div>
+    <p id="progressText"></p>
+  </div>
+  <script type="module" src="/src/screen.js"></script>
+</body>
+</html>
