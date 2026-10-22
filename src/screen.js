@@ -5,54 +5,77 @@ import { scenes, START } from './story.js';
 const room = roomFromUrl();
 const store = connect(room);
 const $ = (id) => document.getElementById(id);
-const video = $('video');
 
 const joinUrl = new URL(`play.html?room=${encodeURIComponent(room)}`, location.href).href;
 $('joinUrl').textContent = usingFirebase ? joinUrl : `${joinUrl} (local test mode: open in another tab)`;
 QRCode.toCanvas($('qr'), joinUrl, { width: 260, margin: 1 });
 
+// The screen drives the film locally so cuts never wait on the network.
+// Firebase only carries the current scene out to the phones and their
+// responses back. Every clip gets its own preloaded <video>, so a cut is
+// just swapping which element is visible.
+const videos = new Map();
+for (const scene of Object.values(scenes)) {
+  for (const src of [scene.clip, scene.loopClip]) {
+    if (!src || videos.has(src)) continue;
+    const v = document.createElement('video');
+    v.src = src;
+    v.preload = 'auto';
+    v.playsInline = true;
+    $('stage').appendChild(v);
+    videos.set(src, v);
+  }
+}
+
 let state = {};
-let currentScene = null;
+let current = null;
+let active = null;
 let waitTimer = null;
+
+waitForClips();
 
 store.subscribe((next) => {
   state = next;
   $('playerCount').textContent = playerCount();
-  if (state.scene?.id !== currentScene) {
-    currentScene = state.scene?.id ?? null;
-    if (currentScene) playScene(currentScene);
-  }
-  if (state.scene?.phase === 'interact') checkInteraction();
+  if (current && scenes[current].interaction && state.scene?.phase === 'interact') checkInteraction();
 });
 
 $('startBtn').onclick = async () => {
   await store.reset();
-  // Browsers only allow sound after a click, so unlock audio here.
-  video.muted = false;
-  store.setScene(START);
+  goTo(START);
 };
+
+$('resetBtn').onclick = reset;
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'r' || e.key === 'R') reset();
+});
 
 function playerCount() {
   return Object.keys(state.players || {}).length;
 }
 
-function playScene(id) {
+function goTo(id) {
+  current = id;
+  clearTimeout(waitTimer);
   const scene = scenes[id];
   $('lobby').classList.add('hidden');
   $('hud').classList.add('hidden');
-  clearTimeout(waitTimer);
-  playClip(scene.clip, false).then(() => {
+  $('resetBtn').classList.remove('hidden');
+  show(scene.clip, false).then(() => {
+    if (current !== id) return;
     if (scene.interaction) {
-      store.setScene(id, 'interact');
       openInteraction(scene);
     } else {
       advance(scene);
     }
   });
+  store.setScene(id);
 }
 
 function openInteraction(scene) {
-  if (scene.loopClip) playClip(scene.loopClip, true);
+  // Cut straight into the loop; if there is none, hold the last frame.
+  if (scene.loopClip) show(scene.loopClip, true);
+  store.setScene(current, 'interact');
   $('prompt').textContent = scene.interaction.prompt;
   $('hud').classList.remove('hidden');
   waitTimer = setTimeout(() => advance(scene), scene.interaction.timeoutMs);
@@ -60,9 +83,8 @@ function openInteraction(scene) {
 }
 
 function checkInteraction() {
-  const scene = scenes[currentScene];
-  if (!scene?.interaction) return;
-  const done = Object.keys(state.responses?.[currentScene] || {}).length;
+  const scene = scenes[current];
+  const done = Object.keys(state.responses?.[current] || {}).length;
   const needed = Math.max(1, Math.ceil(playerCount() * scene.interaction.threshold));
   $('progress').style.width = `${Math.min(100, (done / needed) * 100)}%`;
   $('progressText').textContent = `${done} / ${needed}`;
@@ -74,38 +96,69 @@ function checkInteraction() {
 
 function advance(scene) {
   clearTimeout(waitTimer);
-  if (scene.next) {
-    store.setScene(scene.next);
-  } else {
-    $('hud').classList.add('hidden');
-  }
+  $('hud').classList.add('hidden');
+  if (scene.next) goTo(scene.next);
 }
 
-// Resolves when the clip ends. Missing clips show a title card instead so
-// the flow can be tested before the footage exists.
-function playClip(src, loop) {
+// Starts a clip from the top and makes it the visible one. The previous clip
+// stays on screen until the new one has a frame, so there is never black.
+// Resolves when a non-looping clip ends.
+function show(src, loop) {
+  const v = videos.get(src);
+  const prev = active;
+  active = v;
+  v.loop = loop;
+  v.currentTime = 0;
   return new Promise((resolve) => {
-    video.loop = loop;
-    video.src = src;
-    video.onended = () => resolve();
-    video.onerror = () => {
-      video.removeAttribute('src');
-      showPlaceholder(src);
-      if (!loop) setTimeout(resolve, 3000);
+    // A clip that failed to load is skipped rather than stalling the film.
+    if (v.error) return resolve();
+    v.onended = loop ? null : () => resolve();
+    const reveal = () => {
+      v.classList.add('active');
+      if (prev && prev !== v) {
+        prev.classList.remove('active');
+        prev.pause();
+      }
     };
-    video.play().catch(() => {});
+    v.play().then(reveal, () => {
+      // Autoplay with sound blocked: retry muted rather than stall the film.
+      v.muted = true;
+      v.play().then(reveal, () => {});
+    });
+    v.onerror = () => resolve();
   });
 }
 
-function showPlaceholder(src) {
-  let card = document.getElementById('placeholder');
-  if (!card) {
-    card = document.createElement('div');
-    card.id = 'placeholder';
-    card.className = 'overlay';
-    document.body.appendChild(card);
+async function reset() {
+  clearTimeout(waitTimer);
+  current = null;
+  for (const v of videos.values()) {
+    v.pause();
+    v.classList.remove('active');
+    v.currentTime = 0;
   }
-  card.textContent = `[ ${src.split('/').pop()} ]`;
-  card.classList.remove('hidden');
-  setTimeout(() => card.classList.add('hidden'), 2900);
+  active = null;
+  $('hud').classList.add('hidden');
+  $('resetBtn').classList.add('hidden');
+  $('lobby').classList.remove('hidden');
+  await store.reset();
+}
+
+// Begin unlocks once every clip has buffered enough to play through.
+function waitForClips() {
+  const all = [...videos.values()];
+  let ready = 0;
+  const update = () => {
+    $('loading').textContent = ready < all.length ? `Loading film… ${ready}/${all.length}` : '';
+    $('startBtn').disabled = ready < all.length;
+  };
+  for (const v of all) {
+    const done = () => { ready++; update(); };
+    if (v.readyState >= 4) done();
+    else {
+      v.addEventListener('canplaythrough', done, { once: true });
+      v.addEventListener('error', done, { once: true });
+    }
+  }
+  update();
 }

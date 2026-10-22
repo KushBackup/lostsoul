@@ -7,19 +7,21 @@
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body class="screen">
-  <video id="video" playsinline></video>
+  <div id="stage"></div>
   <div id="lobby" class="overlay">
     <h1>LOST SOUL</h1>
     <canvas id="qr"></canvas>
     <p id="joinUrl"></p>
     <p><span id="playerCount">0</span> souls connected</p>
-    <button id="startBtn" class="btn">Begin</button>
+    <p id="loading">Loading film…</p>
+    <button id="startBtn" class="btn" disabled>Begin</button>
   </div>
   <div id="hud" class="hud hidden">
     <p id="prompt"></p>
     <div class="bar"><div id="progress"></div></div>
     <p id="progressText"></p>
   </div>
+  <button id="resetBtn" class="reset hidden" title="Back to lobby (R)">Reset</button>
   <script type="module" src="/src/screen.js"></script>
 </body>
 </html>

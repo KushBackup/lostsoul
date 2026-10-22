@@ -17,7 +17,10 @@ viewer's phone shows the interaction the current scene needs.
     cp .env.example .env.local   # fill in Firebase web config
     npm run dev
 
-Use `?room=name` on both pages to run separate rooms.
+Use `?room=name` on both pages to run separate rooms. On the big screen, the
+Reset button (top-right, appears on hover) or the R key returns to the lobby.
+The screen preloads every clip and cuts between them locally, so playback
+never waits on the network; Begin unlocks once all clips have buffered.
 
 ## Clips
 
