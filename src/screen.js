@@ -100,10 +100,15 @@ function advance(scene) {
   if (scene.next) goTo(scene.next);
 }
 
-// Starts a clip from the top and makes it the visible one. The new clip is
-// layered on top and only revealed once it is playing, so the previous
-// clip's last frame covers the cut and there is never a black flash. Resolves when a non-looping clip ends.
-let layer = 0;
+// Starts a clip from the top and makes it the visible one. Swapping <video>
+// elements can show a black frame while the new one gets its first frame on
+// screen, so the old clip's last frame is copied onto a canvas laid over the
+// stage and held there until the new clip has painted.
+// Resolves when a non-looping clip ends.
+const freeze = document.createElement('canvas');
+freeze.id = 'freeze';
+$('stage').appendChild(freeze);
+
 function show(src, loop) {
   const v = videos.get(src);
   const prev = active;
@@ -115,19 +120,13 @@ function show(src, loop) {
     if (v.error) return resolve();
     v.onended = loop ? null : () => resolve();
     v.onerror = () => resolve();
-    if (v === prev) {
-      v.play().catch(() => {});
-      return;
+    if (prev && prev !== v) {
+      holdFrame(prev);
+      prev.classList.remove('active');
+      prev.pause();
     }
-    v.style.zIndex = ++layer;
-    const reveal = () => {
-      v.classList.add('active');
-      if (prev) {
-        prev.classList.remove('active');
-        prev.pause();
-      }
-    };
-    onFirstFrame(v, reveal);
+    v.classList.add('active');
+    afterFirstPaint(v, () => freeze.classList.remove('on'));
     v.play().catch(() => {
       // Autoplay with sound blocked: retry muted rather than stall the film.
       v.muted = true;
@@ -136,10 +135,33 @@ function show(src, loop) {
   });
 }
 
-// Calls fn once the clip is actually playing, i.e. it has a decoded frame
-// to show, so swapping it in never exposes an empty (black) element.
-function onFirstFrame(v, fn) {
-  v.addEventListener('playing', fn, { once: true });
+function holdFrame(v) {
+  freeze.width = v.videoWidth || 1920;
+  freeze.height = v.videoHeight || 1080;
+  try {
+    freeze.getContext('2d').drawImage(v, 0, 0, freeze.width, freeze.height);
+    freeze.classList.add('on');
+  } catch {
+    // Nothing to hold; the cut just happens.
+  }
+}
+
+// Calls fn once v has painted a frame, or after a short cap so a slow frame
+// callback can never make the picture look frozen.
+function afterFirstPaint(v, fn) {
+  let done = false;
+  const once = () => {
+    if (!done) {
+      done = true;
+      fn();
+    }
+  };
+  setTimeout(once, 200);
+  if ('requestVideoFrameCallback' in v) {
+    v.requestVideoFrameCallback(() => requestAnimationFrame(once));
+  } else {
+    v.addEventListener('playing', () => requestAnimationFrame(() => requestAnimationFrame(once)), { once: true });
+  }
 }
 
 async function reset() {
@@ -151,6 +173,7 @@ async function reset() {
     v.currentTime = 0;
   }
   active = null;
+  freeze.classList.remove('on');
   $('hud').classList.add('hidden');
   $('resetBtn').classList.add('hidden');
   $('lobby').classList.remove('hidden');
